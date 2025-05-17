@@ -7,8 +7,8 @@ from admin_console_ui import (
     render_profile_form,
     clear_frame,
     show_missing_profile_options,
-    create_empty_talent_profile,
-    create_empty_recruiter_profile
+    create_empty_recruiter_profile,
+    create_blank_talent_form
 )
 from admin_notes_and_applications import (
     show_talent_applications,
@@ -243,11 +243,97 @@ class AdminApp:
             messagebox.showerror("Error", f"Failed to load record: {str(e)}")
 
     def save_changes(self):
-        pass  # logic for saving updates to profile fields if needed
+        if not self.record_type or not self.form_fields:
+            messagebox.showwarning("No Record", "No record loaded to save.")
+            return
 
+        table = "talent_profiles" if self.record_type == "talent" else "talent_recruiters"
+        id_field = "talent_id" if self.record_type == "talent" else "recruiter_id"
+
+        # Optional: add known enum choices
+        valid_availability = {"available", "unavailable", "immediately", "later"}
+        valid_profile_modes = {"active", "passive"}
+        valid_employment_types = {"Fulltime", "Parttime", "Contract", "Freelance"}
+
+        data = {}
+        for field, entry in self.form_fields.items():
+            col_name = field.split(":", 1)[1] if ":" in field else field
+            value = entry.get()
+
+            if value == "":
+                data[col_name] = None
+            elif col_name in ["skills", "industry_experience"]:
+                data[col_name] = [v.strip() for v in value.split(",") if v.strip()]
+            elif col_name in ["job_alerts_enabled", "requires_two_weeks_notice"]:
+                data[col_name] = value.lower() in ["true", "yes", "1"]
+            elif col_name == "time_availability":
+                data[col_name] = value if value.strip() else "{}"
+            elif col_name == "availability":
+                value_norm = value.strip().lower()
+                if value_norm not in valid_availability:
+                    messagebox.showerror("Invalid availability", f"'{value}' is not one of {', '.join(valid_availability)}")
+                    return
+                data[col_name] = value_norm
+            elif col_name == "profile_mode":
+                value_norm = value.strip().lower()
+                data[col_name] = value_norm if value_norm in valid_profile_modes else "active"
+
+            elif col_name == "employment_type":
+                value_norm = value.strip().capitalize()
+                data[col_name] = value_norm if value_norm in valid_employment_types else "Fulltime"
+            else:
+                data[col_name] = value
+
+        try:
+            conn = db.get_connection(self.env.get())
+            cur = conn.cursor()
+
+            if not data.get(id_field):  # INSERT
+                cols = list(data.keys())
+                vals = [data[col] for col in cols]
+                placeholders = ", ".join(["%s"] * len(cols))
+                query = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
+                # ✅ Add this debug print
+                print("\n-- DEBUG: SQL INSERT --")
+                print("Table:", table)
+                print("Query:", query)
+                print("Values:", vals)
+                print("-- END DEBUG --\n")
+                cur.execute(query, vals)
+                conn.commit()
+                messagebox.showinfo("Inserted", f"{self.record_type.capitalize()} profile created.")
+            else:  # UPDATE
+                record_id = data[id_field]
+                updates = ", ".join([f"{col} = %s" for col in data if col != id_field])
+                values = [data[col] for col in data if col != id_field]
+                query = f"UPDATE {table} SET {updates} WHERE {id_field} = %s"
+                print("\n-- DEBUG: SQL UPDATE --")
+                print("Table:", table)
+                print("Query:", query)
+                print("Values:", values + [record_id])
+                print("-- END DEBUG --\n")
+                cur.execute(query, values + [record_id])
+                conn.commit()
+                messagebox.showinfo("Saved", f"{self.record_type.capitalize()} profile saved successfully.")
+
+            cur.close()
+            conn.close()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save: {str(e)}")
+            
+        
+   
     def _create_talent_and_reload(self, user_id):
-        create_empty_talent_profile(user_id)
-        self.load_specific_profile(user_id)
+        self.record_type = "talent"
+        self.selected_user_id = user_id
+        self.current_data = {}
+        clear_frame(self.edit_frame)
+        clear_frame(self.right_pane)
+        self.form_fields.clear()
+
+        create_blank_talent_form(user_id, self.edit_frame, self.form_fields)
+
 
     def _create_recruiter_and_reload(self, user_id):
         create_empty_recruiter_profile(user_id)
